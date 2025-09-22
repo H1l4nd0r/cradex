@@ -957,6 +957,22 @@ class FuturesArbitrageScanner {
     // Send execute arbitrage command to server
     executeArbitrage(opportunityId) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            // Find and highlight the opportunity row
+            const row = document.querySelector(`tr[data-id="${opportunityId}"]`);
+            if (row) {
+                row.style.backgroundColor = 'rgba(0, 255, 255, 0.3)'; // Cyan highlight
+                row.style.borderLeft = '3px solid #00ffff';
+            }
+
+            // Disable the Go button
+            const goButton = document.querySelector(`button[data-opportunity-id="${opportunityId}"]`);
+            if (goButton) {
+                goButton.disabled = true;
+                goButton.textContent = 'Sent';
+                goButton.style.backgroundColor = '#666';
+                goButton.style.cursor = 'not-allowed';
+            }
+
             const message = `execute_arbitrage:${opportunityId}`;
             this.ws.send(message);
             console.log(`Sent execute arbitrage for opportunity: ${opportunityId}`);
