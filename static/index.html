@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Arbitrage Scanner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0a0a;
+            color: #e0e0e0;
+            font-family: 'JetBrains Mono', 'Monaco', 'Consolas', monospace;
+            font-size: 13px;
+            overflow: hidden;
+        }
+
+        .container {
+            display: grid;
+            grid-template-areas:
+                "header header"
+                "sidebar main";
+            grid-template-columns: 700px 1fr;
+            grid-template-rows: 60px 1fr;
+            height: 100vh;
+            gap: 1px;
+            background: #111;
+        }
+
+        .header {
+            grid-area: header;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            justify-content: space-between;
+        }
+
+        .logo {
+            color: #00ff88;
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        .status {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            position: relative;
+        }
+
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-dot.connected {
+            background: #00ff88;
+        }
+
+        .status-dot.disconnected {
+            background: #ff4444;
+        }
+
+        .sidebar {
+            grid-area: sidebar;
+            background: #151515;
+            border-right: 1px solid #333;
+            overflow-y: auto;
+        }
+
+        .main {
+            grid-area: main;
+            background: #0f0f0f;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+
+        .panel {
+            margin: 10px;
+            background: rgba(26, 26, 26, 0.9);
+            border: 1px solid #333;
+            border-radius: 6px;
+        }
+
+        .panel-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #333;
+            font-weight: bold;
+            color: #00ff88;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .panel-content {
+            padding: 16px;
+        }
+
+        .symbol-selector {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .symbol-input {
+            background: #222;
+            border: 1px solid #444;
+            color: #e0e0e0;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 12px;
+        }
+
+        .symbol-input:focus {
+            outline: none;
+            border-color: #00ff88;
+        }
+
+        .source-list {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .source-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: rgba(34, 34, 34, 0.5);
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .source-item:hover {
+            background: rgba(34, 34, 34, 0.8);
+        }
+
+        .source-name {
+            color: #888;
+            font-size: 9px;
+            text-transform: uppercase;
+        }
+
+        .source-color-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .source-price {
+            font-weight: bold;
+            color: #e0e0e0;
+        }
+
+        .price-change {
+            font-size: 10px;
+            margin-left: 8px;
+        }
+
+        .price-change.up {
+            color: #00ff88;
+        }
+
+        .price-change.down {
+            color: #ff4444;
+        }
+
+        .chart-container {
+            flex: 1;
+            margin: 10px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            position: relative;
+            min-height: 400px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chart-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chart-title {
+            color: #00ff88;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+
+        .opportunities-table-container {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .opportunities-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+            background: transparent;
+        }
+
+        .opportunities-table thead {
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .opportunities-table th {
+            padding: 8px 6px;
+            text-align: left;
+            font-weight: bold;
+            color: #888;
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            border-right: 1px solid #333;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .opportunities-table th:hover {
+            background: #222;
+        }
+
+        .opportunities-table th:last-child {
+            border-right: none;
+        }
+
+        .opportunities-table th.sortable::after {
+            content: '↕';
+            margin-left: 4px;
+            opacity: 0.5;
+        }
+
+        .opportunities-table th.sort-asc::after {
+            content: '↑';
+            opacity: 1;
+            color: #00ff88;
+        }
+
+        .opportunities-table th.sort-desc::after {
+            content: '↓';
+            opacity: 1;
+            color: #00ff88;
+        }
+
+        .opportunities-table tbody {
+            background: transparent;
+        }
+
+        .opportunities-table tr {
+            border-bottom: 1px solid #222;
+            transition: background 0.2s;
+        }
+
+        .opportunities-table tr:hover {
+            background: rgba(0, 255, 136, 0.05);
+        }
+
+        .opportunities-table tr.fresh {
+            background: rgba(0, 255, 136, 0.1);
+            animation: fadeToNormal 3s ease-out forwards;
+        }
+
+        @keyframes fadeToNormal {
+            0% {
+                background: rgba(0, 255, 136, 0.2);
+            }
+
+            100% {
+                background: transparent;
+            }
+        }
+
+        .opportunities-table td {
+            padding: 6px;
+            border-right: 1px solid #222;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .opportunities-table td:last-child {
+            border-right: none;
+        }
+
+        .orders-table-container {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .orders-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+            background: transparent;
+        }
+
+        .orders-table thead {
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .orders-table th {
+            padding: 8px 6px;
+            text-align: left;
+            font-weight: bold;
+            color: #888;
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            border-right: 1px solid #333;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .orders-table th:hover {
+            background: #222;
+        }
+
+        .orders-table th:last-child {
+            border-right: none;
+        }
+
+        .orders-table th.sortable::after {
+            content: '↕';
+            margin-left: 4px;
+            opacity: 0.5;
+        }
+
+        .orders-table th.sort-asc::after {
+            content: '↑';
+            opacity: 1;
+            color: #00ff88;
+        }
+
+        .orders-table th.sort-desc::after {
+            content: '↓';
+            opacity: 1;
+            color: #00ff88;
+        }
+
+        .orders-table tbody {
+            background: transparent;
+        }
+
+        .orders-table tr {
+            border-bottom: 1px solid #222;
+            transition: background 0.2s;
+        }
+
+        .orders-table tr:hover {
+            background: rgba(0, 255, 136, 0.05);
+        }
+
+        .orders-table tr.fresh {
+            background: rgba(0, 255, 136, 0.1);
+            animation: fadeToNormal 3s ease-out forwards;
+        }
+
+        .orders-table td {
+            padding: 6px;
+            border-right: 1px solid #222;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .orders-table td:last-child {
+            border-right: none;
+        }
+
+        .symbol-cell {
+            color: #00ff88;
+            font-weight: bold;
+        }
+
+        .profit-cell {
+            color: #ff6b6b;
+            font-weight: bold;
+            text-align: right;
+        }
+
+        .profit-cell.high {
+            color: #ff4444;
+        }
+
+        .profit-cell.medium {
+            color: #ff8844;
+        }
+
+        .profit-cell.low {
+            color: #ffaa44;
+        }
+
+        .source-cell {
+            color: #ccc;
+            font-size: 10px;
+        }
+
+        .price-cell {
+            color: #e0e0e0;
+            text-align: right;
+            font-weight: 500;
+        }
+
+        .time-cell {
+            color: #666;
+            font-size: 10px;
+            text-align: center;
+        }
+
+        .action-cell {
+            color: #666;
+            font-size: 10px;
+            text-align: center;
+        }
+
+        
+        .opportunities-table-body {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        .opportunities-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100px;
+            color: #666;
+            font-size: 11px;
+            font-style: italic;
+        }
+
+        .opportunities-controls {
+            padding: 8px 12px;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .opportunities-filter {
+            background: #222;
+            border: 1px solid #444;
+            color: #e0e0e0;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-family: inherit;
+            font-size: 10px;
+            width: 80px;
+        }
+
+        .opportunities-filter:focus {
+            outline: none;
+            border-color: #00ff88;
+        }
+
+        .opportunities-stats {
+            color: #888;
+            font-size: 10px;
+        }
+
+        .clear-opportunities {
+            background: #333;
+            border: 1px solid #555;
+            color: #ccc;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 10px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .clear-opportunities:hover {
+            background: #444;
+        }
+
+
+        .orders-table-body {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        .orders-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100px;
+            color: #666;
+            font-size: 11px;
+            font-style: italic;
+        }
+
+        .orders-controls {
+            padding: 8px 12px;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .orders-filter {
+            background: #222;
+            border: 1px solid #444;
+            color: #e0e0e0;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-family: inherit;
+            font-size: 10px;
+            width: 80px;
+        }
+
+        .orders-filter:focus {
+            outline: none;
+            border-color: #00ff88;
+        }
+
+        .orders-stats {
+            color: #888;
+            font-size: 10px;
+        }
+
+        .clear-orders {
+            background: #333;
+            border: 1px solid #555;
+            color: #ccc;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 10px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .clear-orders:hover {
+            background: #444;
+        }
+
+        .spreads-matrix {
+            display: grid;
+            gap: 2px;
+            font-size: 9px;
+            font-family: 'JetBrains Mono', monospace;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .spread-header {
+            background: #1a1a1a;
+            padding: 6px 4px;
+            text-align: center;
+            font-weight: bold;
+            color: #888;
+            text-transform: uppercase;
+            font-size: 9px;
+            border-radius: 2px;
+        }
+
+        .spread-row-header {
+            background: #1a1a1a;
+            padding: 6px 4px;
+            text-align: center;
+            font-weight: bold;
+            color: #888;
+            text-transform: uppercase;
+            font-size: 9px;
+            border-radius: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .spread-cell {
+            background: #222;
+            padding: 6px 4px;
+            text-align: center;
+            border-radius: 2px;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        .spread-cell.positive {
+            background: rgba(0, 255, 136, 0.1);
+            color: #00ff88;
+        }
+
+        .spread-cell.negative {
+            background: rgba(255, 68, 68, 0.1);
+            color: #ff4444;
+        }
+
+        .spread-cell.neutral {
+            background: #333;
+            color: #666;
+        }
+
+        .spread-cell.opportunity {
+            background: rgba(255, 165, 0, 0.2);
+            color: #ffa500;
+            animation: pulse-opportunity 2s infinite;
+        }
+
+        @keyframes pulse-opportunity {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.7;
+            }
+        }
+
+
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #888;
+            font-size: 12px;
+        }
+
+        .loading::after {
+            content: "...";
+            animation: dots 2s infinite;
+        }
+
+        @keyframes dots {
+
+            0%,
+            20% {
+                content: ".";
+            }
+
+            40% {
+                content: "..";
+            }
+
+            60%,
+            100% {
+                content: "...";
+            }
+        }
+
+
+
+        .scrollbar {
+            scrollbar-width: thin;
+            scrollbar-color: #444 #222;
+        }
+
+        .scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .scrollbar::-webkit-scrollbar-track {
+            background: #222;
+        }
+
+        .scrollbar::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 3px;
+        }
+
+        .scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+
+        .chart-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .realtime-btn {
+            font-family: -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif;
+            font-size: 12px;
+            font-weight: 500;
+            padding: 6px 16px;
+            color: #e0e0e0;
+            background-color: #333;
+            border: 1px solid #555;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .realtime-btn:hover {
+            background-color: #444;
+            border-color: #00ff88;
+        }
+
+        .realtime-btn:active {
+            background-color: #00ff88;
+            color: #0a0a0a;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">⚡ CRYPTO ARBITRAGE SCANNER</div>
+            <div class="status">
+                <div class="status-item">
+                    <div class="status-dot" id="wsStatus"></div>
+                    <span id="wsStatusText">Connecting...</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar scrollbar">
+            <div class="panel">
+                <div class="panel-header">Symbol</div>
+                <div class="panel-content">
+                    <div class="symbol-selector">
+                        <select id="symbolSelect" class="symbol-input">
+                            <option value="BTCUSDT">BTCUSDT</option>
+                            <option value="ETHUSDT">ETHUSDT</option>
+                            <option value="XRPUSDT">XRPUSDT</option>
+                            <option value="SOLUSDT">SOLUSDT</option>
+                            <option value="MYXUSDT">MYXUSDT</option>
+                        </select>
+                        <div id="symbolStatus" style="margin-top: 8px; font-size: 10px; color: #00ff88; text-align: center;">BTCUSDT</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">Active orders</div>
+                <div class="orders-controls">
+                    <button class="clear-orders">Close all</button>
+                </div>
+                <div class="orders-table-container">
+                    <table class="orders-table">
+                        <thead>
+                            <tr>
+                                <th class="sortable" data-sort="symbol">Symbol</th>
+                                <th class="sortable" data-sort="profit">Profit %</th>
+                                <th class="sortable" data-sort="buy_source">Buy</th>
+                                <th class="sortable" data-sort="buy_price">Buy $</th>
+                                <th class="sortable" data-sort="sell_source">Sell</th>
+                                <th class="sortable" data-sort="sell_price">Sell $</th>
+                                <th class="sortable" data-sort="timestamp">Time</th>
+                                <th class="sortable" data-sort="timestamp">Action</th>
+                            </tr>
+                        </thead>
+                    </table>
+                    <div class="orders-table-body scrollbar">
+                        <table class="orders-table">
+                            <tbody id="ordersTableBody">
+                                <tr>
+                                    <td colspan="7" class="orders-empty">No active orders...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">Arbitrage Alerts</div>
+                <div class="opportunities-controls">
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <label style="font-size: 10px; color: #888;">Min %:</label>
+                        <input type="number" id="minProfitFilter" class="opportunities-filter" placeholder="0.05"
+                            step="0.01" min="0" value="0.05">
+                    </div>
+                    <div class="opportunities-stats" id="opportunitiesStats">0 alerts</div>
+                    <button class="clear-opportunities" id="clearOpportunities">Clear</button>
+                </div>
+                <div class="opportunities-table-container">
+                    <table class="opportunities-table">
+                        <thead>
+                            <tr>
+                                <th class="sortable" data-sort="symbol">Symbol</th>
+                                <th class="sortable" data-sort="profit">Profit %</th>
+                                <th class="sortable" data-sort="buy_source">Buy</th>
+                                <th class="sortable" data-sort="buy_price">Buy $</th>
+                                <th class="sortable" data-sort="sell_source">Sell</th>
+                                <th class="sortable" data-sort="sell_price">Sell $</th>
+                                <th class="sortable" data-sort="timestamp">Time</th>
+                                <th class="sortable" data-sort="timestamp">Action</th>
+                            </tr>
+                        </thead>
+                    </table>
+                    <div class="opportunities-table-body scrollbar">
+                        <table class="opportunities-table">
+                            <tbody id="opportunitiesTableBody">
+                                <tr>
+                                    <td colspan="7" class="opportunities-empty">No alerts yet...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            
+
+            <div class="panel">
+                <div class="panel-header">Sources</div>
+                <div class="panel-content">
+                    <div class="source-list" id="sourceList">
+                        <div class="loading">Loading sources</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">Current Spreads</div>
+                <div class="panel-content">
+                    <div id="spreadsMatrix" class="spreads-matrix">
+                        <div class="loading">Waiting for price data...</div>
+                    </div>
+                </div>
+            </div>
+
+            
+
+        </div>
+
+        <div class="main">
+            <div class="chart-container" style="flex: 1.5;">
+                <div class="chart-header">
+                    <div class="chart-title" id="chartTitle">Price Chart - BTCUSDT (Live)</div>
+                    <div class="chart-controls">
+                        <button id="goToRealtimeBtn" class="realtime-btn">Go to realtime</button>
+                    </div>
+                </div>
+                <div id="chart"
+                    style="flex: 1; padding: 10px; overflow: hidden; position: relative; box-sizing: border-box;">
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+
+    <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
