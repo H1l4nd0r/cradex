@@ -1033,27 +1033,30 @@ class FuturesArbitrageScanner {
             const opp = group.opportunity;
             const orders = group.orders;
 
-            // Calculate live price difference
+            // Calculate live price difference and profit percentage
             const currentBuyPrice = this.sources.get(opp.buy_source)?.price;
             const currentSellPrice = this.sources.get(opp.sell_source)?.price;
-            let priceDiff, color;
+            let priceDiff, liveProfitPct, color;
 
             if (currentBuyPrice && currentSellPrice) {
-                priceDiff = (currentSellPrice - currentBuyPrice).toFixed(2);
-                color = parseFloat(priceDiff) < 0 ? '#ff4444' : '#00ff88'; // Red for negative, green for positive
+                priceDiff = (currentSellPrice - currentBuyPrice);
+                liveProfitPct = ((currentSellPrice - currentBuyPrice) / currentBuyPrice) * 100;
+                color = priceDiff < 0 ? '#ff4444' : '#00ff88'; // Red for negative, green for positive
             } else {
                 // Fallback to original prices if current not available
-                priceDiff = (opp.sell_price - opp.buy_price).toFixed(2);
-                color = '#00ff88';
+                priceDiff = (opp.sell_price - opp.buy_price);
+                liveProfitPct = opp.profit_pct;
+                color = liveProfitPct < 0 ? '#ff4444' : '#00ff88'; // Red for negative profit, green for positive
             }
 
-            const priceDiffDisplay = `${parseFloat(priceDiff) < 0 ? '' : '+'}$${priceDiff}`;
+            const priceDiffDisplay = `${priceDiff < 0 ? '' : '+'}$${priceDiff.toFixed(2)}`;
+            const profitDisplay = `${liveProfitPct < 0 ? '' : '+'}${liveProfitPct.toFixed(3)}%`;
 
             // Add opportunity header row
             html += `
                 <tr class="opportunity-header" style="background: rgba(0, 255, 136, 0.05); border-top: 1px solid #333;">
                     <td colspan="8" style="font-weight: bold; color: ${color}; font-size: 10px; text-align: center;">
-                        Arbitrage Opportunity ID: ${opp.id} | Symbol: ${opp.symbol} | Live Price Diff: ${priceDiffDisplay} (${opp.profit_pct.toFixed(3)}%)
+                        Arbitrage Opportunity ID: ${opp.id} | Symbol: ${opp.symbol} | Live Price Diff: ${priceDiffDisplay} (${profitDisplay})
                     </td>
                 </tr>
             `;
