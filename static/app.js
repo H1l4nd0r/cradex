@@ -26,6 +26,7 @@ class FuturesArbitrageScanner {
         this.sourceUpdatePending = false;
         this.opportunitiesUpdatePending = false;
         this.spreadsUpdatePending = false;
+        this.activeOrdersUpdatePending = false;
         
         // Realtime tracking
         this.isAtRealtime = true;
@@ -430,6 +431,7 @@ class FuturesArbitrageScanner {
         // Schedule UI updates
         this.updateSourceList();
         this.updateChart();
+        this.updateActiveOrdersTable();
     }
     
     handleBatchedPriceUpdates(priceUpdates) {
@@ -988,6 +990,16 @@ class FuturesArbitrageScanner {
     }
 
     updateActiveOrdersTable() {
+        if (!this.activeOrdersUpdatePending) {
+            this.activeOrdersUpdatePending = true;
+            setTimeout(() => {
+                this.performActiveOrdersTableUpdate();
+                this.activeOrdersUpdatePending = false;
+            }, 250);
+        }
+    }
+
+    performActiveOrdersTableUpdate() {
         const tbody = document.getElementById('ordersTableBody');
 
         if (!this.activeOrders || this.activeOrders.length === 0) {
@@ -1020,13 +1032,28 @@ class FuturesArbitrageScanner {
         for (const [oppId, group] of ordersByOpportunity) {
             const opp = group.opportunity;
             const orders = group.orders;
-            const priceDiff = (opp.sell_price - opp.buy_price).toFixed(2);
+
+            // Calculate live price difference
+            const currentBuyPrice = this.sources.get(opp.buy_source)?.price;
+            const currentSellPrice = this.sources.get(opp.sell_source)?.price;
+            let priceDiff, color;
+
+            if (currentBuyPrice && currentSellPrice) {
+                priceDiff = (currentSellPrice - currentBuyPrice).toFixed(2);
+                color = parseFloat(priceDiff) < 0 ? '#ff4444' : '#00ff88'; // Red for negative, green for positive
+            } else {
+                // Fallback to original prices if current not available
+                priceDiff = (opp.sell_price - opp.buy_price).toFixed(2);
+                color = '#00ff88';
+            }
+
+            const priceDiffDisplay = `${parseFloat(priceDiff) < 0 ? '' : '+'}$${priceDiff}`;
 
             // Add opportunity header row
             html += `
                 <tr class="opportunity-header" style="background: rgba(0, 255, 136, 0.05); border-top: 1px solid #333;">
-                    <td colspan="8" style="font-weight: bold; color: #00ff88; font-size: 10px; text-align: center;">
-                        Arbitrage Opportunity ID: ${opp.id} | Symbol: ${opp.symbol} | Price Diff: $${priceDiff} (${opp.profit_pct.toFixed(3)}%)
+                    <td colspan="8" style="font-weight: bold; color: ${color}; font-size: 10px; text-align: center;">
+                        Arbitrage Opportunity ID: ${opp.id} | Symbol: ${opp.symbol} | Live Price Diff: ${priceDiffDisplay} (${opp.profit_pct.toFixed(3)}%)
                     </td>
                 </tr>
             `;
