@@ -710,11 +710,9 @@ class FuturesArbitrageScanner {
     }
 
     handleArbitrageOpportunity(opportunity) {
-        // Add unique ID for tracking
-        opportunity.id = Date.now() + Math.random();
-        
+        // Opportunity already has ID from backend, don't override it
         this.arbitrageOpportunities.unshift(opportunity);
-        
+
         if (this.arbitrageOpportunities.length > this.maxOpportunities) {
             this.arbitrageOpportunities = this.arbitrageOpportunities.slice(0, this.maxOpportunities);
         }
@@ -997,9 +995,71 @@ class FuturesArbitrageScanner {
             return;
         }
 
-        // Generate table rows for active orders
-        let html = '';
+        // Group orders by opportunity
+        const ordersByOpportunity = new Map();
+        const ordersWithoutOpportunity = [];
+
         this.activeOrders.forEach((order) => {
+            if (order.opportunity && order.opportunity.id) {
+                if (!ordersByOpportunity.has(order.opportunity.id)) {
+                    ordersByOpportunity.set(order.opportunity.id, {
+                        opportunity: order.opportunity,
+                        orders: []
+                    });
+                }
+                ordersByOpportunity.get(order.opportunity.id).orders.push(order);
+            } else {
+                ordersWithoutOpportunity.push(order);
+            }
+        });
+
+        // Generate table rows for active orders, grouped by opportunity
+        let html = '';
+
+        // First, add orders with opportunities
+        for (const [oppId, group] of ordersByOpportunity) {
+            const opp = group.opportunity;
+            const orders = group.orders;
+            const priceDiff = (opp.sell_price - opp.buy_price).toFixed(2);
+
+            // Add opportunity header row
+            html += `
+                <tr class="opportunity-header" style="background: rgba(0, 255, 136, 0.05); border-top: 1px solid #333;">
+                    <td colspan="8" style="font-weight: bold; color: #00ff88; font-size: 10px; text-align: center;">
+                        Arbitrage Opportunity ID: ${opp.id} | Symbol: ${opp.symbol} | Price Diff: $${priceDiff} (${opp.profit_pct.toFixed(3)}%)
+                    </td>
+                </tr>
+            `;
+
+            // Add order rows
+            orders.forEach((order) => {
+                const isRecent = Date.now() - order.timestamp < 5000; // Fresh for 5 seconds
+                const timeStr = this.formatTime(order.timestamp);
+
+                // Determine status color
+                let statusClass = 'neutral';
+                if (order.status === 'filled') statusClass = 'positive';
+                else if (order.status === 'pending') statusClass = 'opportunity';
+
+                html += `
+                    <tr class="${isRecent ? 'fresh' : ''}" data-id="${order.id}">
+                        <td class="symbol-cell">${order.symbol}</td>
+                        <td class="profit-cell">${order.side.toUpperCase()}</td>
+                        <td class="source-cell">${this.formatSourceName(order.source)}</td>
+                        <td class="price-cell">$${this.formatPrice(order.price)}</td>
+                        <td class="price-cell">${order.quantity.toFixed(4)}</td>
+                        <td class="time-cell">${timeStr}</td>
+                        <td class="spread-cell ${statusClass}">${order.status.toUpperCase()}</td>
+                        <td class="action-cell">
+                            <button class="close-order-button" data-order-id="${order.id}">×</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        // Then add orders without opportunity (rare, but for backward compatibility)
+        ordersWithoutOpportunity.forEach((order) => {
             const isRecent = Date.now() - order.timestamp < 5000; // Fresh for 5 seconds
             const timeStr = this.formatTime(order.timestamp);
 

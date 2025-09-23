@@ -27,14 +27,15 @@ type ArbitrageOpportunity struct {
 }
 
 type ActiveOrder struct {
-	Id        string  `json:"id"`
-	Symbol    string  `json:"symbol"`
-	Side      string  `json:"side"` // "buy" or "sell"
-	Source    string  `json:"source"`
-	Price     float64 `json:"price"`
-	Quantity  float64 `json:"quantity"`
-	Status    string  `json:"status"` // "pending", "filled", "cancelled"
-	Timestamp int64   `json:"timestamp"`
+	Id          string                `json:"id"`
+	Symbol      string                `json:"symbol"`
+	Side        string                `json:"side"` // "buy" or "sell"
+	Source      string                `json:"source"`
+	Price       float64               `json:"price"`
+	Quantity    float64               `json:"quantity"`
+	Status      string                `json:"status"` // "pending", "filled", "cancelled"
+	Timestamp   int64                 `json:"timestamp"`
+	Opportunity *ArbitrageOpportunity `json:"opportunity,omitempty"`
 }
 
 type FuturesScanner struct {
@@ -42,6 +43,8 @@ type FuturesScanner struct {
 	pricesMutex      sync.RWMutex
 	activeOrders     []ActiveOrder
 	ordersMutex      sync.RWMutex
+	opportunities    map[string]ArbitrageOpportunity
+	oppMutex         sync.RWMutex
 	wsClients        map[*websocket.Conn]bool
 	clientsMutex     sync.RWMutex
 	wsWriteMutex     sync.Mutex // Protects WebSocket writes
@@ -56,6 +59,7 @@ type FuturesScanner struct {
 func NewFuturesScanner() *FuturesScanner {
 	return &FuturesScanner{
 		prices:          make(map[string]map[string]float64),
+		opportunities:   make(map[string]ArbitrageOpportunity),
 		wsClients:       make(map[*websocket.Conn]bool),
 		priceChan:       make(chan exchanges.PriceData, 1000),
 		orderbookChan:   make(chan exchanges.OrderbookData, 1000),
@@ -185,6 +189,10 @@ func (s *FuturesScanner) checkArbitrage(symbol string) {
 }
 
 func (s *FuturesScanner) broadcastOpportunity(opportunity ArbitrageOpportunity) {
+	s.oppMutex.Lock()
+	s.opportunities[opportunity.Id] = opportunity
+	s.oppMutex.Unlock()
+
 	s.clientsMutex.RLock()
 	clients := make([]*websocket.Conn, 0, len(s.wsClients))
 	for client := range s.wsClients {
@@ -373,31 +381,40 @@ func (s *FuturesScanner) handleClientMessage(message string, conn *websocket.Con
 }
 
 func (s *FuturesScanner) executeArbitrageOrders(opportunityId string) {
-	// Find opportunity (in a real implementation, you'd store opportunities in a map)
-	// For now, we'll create mock orders based on a typical arbitrage
+	s.oppMutex.RLock()
+	opportunity, exists := s.opportunities[opportunityId]
+	s.oppMutex.RUnlock()
+
+	if !exists {
+		log.Printf("Opportunity %s not found", opportunityId)
+		return
+	}
+
 	now := time.Now()
 
 	// Create two orders: one buy, one sell
 	buyOrder := ActiveOrder{
-		Id:        fmt.Sprintf("buy_%s_%d", opportunityId, now.Unix()),
-		Symbol:    "BTCUSDT", // In real implementation, get from opportunity
-		Side:      "buy",
-		Source:    "binance_futures", // In real implementation, get from opportunity
-		Price:     50000,             // In real implementation, get from opportunity
-		Quantity:  0.001,
-		Status:    "pending",
-		Timestamp: now.UnixMilli(),
+		Id:          fmt.Sprintf("buy_%s_%d", opportunityId, now.Unix()),
+		Symbol:      opportunity.Symbol,
+		Side:        "buy",
+		Source:      opportunity.BuySource,
+		Price:       opportunity.BuyPrice,
+		Quantity:    0.001, // In real implementation, calculate based on available balance
+		Status:      "pending",
+		Timestamp:   now.UnixMilli(),
+		Opportunity: &opportunity,
 	}
 
 	sellOrder := ActiveOrder{
-		Id:        fmt.Sprintf("sell_%s_%d", opportunityId, now.Unix()),
-		Symbol:    "BTCUSDT",
-		Side:      "sell",
-		Source:    "bybit_futures",
-		Price:     50100,
-		Quantity:  0.001,
-		Status:    "pending",
-		Timestamp: now.UnixMilli(),
+		Id:          fmt.Sprintf("sell_%s_%d", opportunityId, now.Unix()),
+		Symbol:      opportunity.Symbol,
+		Side:        "sell",
+		Source:      opportunity.SellSource,
+		Price:       opportunity.SellPrice,
+		Quantity:    0.001,
+		Status:      "pending",
+		Timestamp:   now.UnixMilli(),
+		Opportunity: &opportunity,
 	}
 
 	s.ordersMutex.Lock()
