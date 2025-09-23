@@ -29,11 +29,11 @@ type ArbitrageOpportunity struct {
 type ActiveOrder struct {
 	Id        string  `json:"id"`
 	Symbol    string  `json:"symbol"`
-	Side      string  `json:"side"`      // "buy" or "sell"
+	Side      string  `json:"side"` // "buy" or "sell"
 	Source    string  `json:"source"`
 	Price     float64 `json:"price"`
 	Quantity  float64 `json:"quantity"`
-	Status    string  `json:"status"`    // "pending", "filled", "cancelled"
+	Status    string  `json:"status"` // "pending", "filled", "cancelled"
 	Timestamp int64   `json:"timestamp"`
 }
 
@@ -166,6 +166,7 @@ func (s *FuturesScanner) checkArbitrage(symbol string) {
 			s.opportunityMutex.Unlock()
 
 			opportunity := ArbitrageOpportunity{
+				Id:         fmt.Sprintf("%s_%d", symbol, now.UnixMilli()),
 				Symbol:     symbol,
 				BuySource:  minSource,
 				SellSource: maxSource,
