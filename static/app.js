@@ -778,10 +778,10 @@ class FuturesArbitrageScanner {
             const isRecent = Date.now() - opp.timestamp < 5000; // Fresh for 5 seconds
             const profitClass = this.getProfitClass(opp.profit_pct);
             const timeStr = this.formatTime(opp.timestamp);
-            
+
             html += `
                 <tr class="${isRecent ? 'fresh' : ''}" data-id="${opp.id}">
-                    <td class="symbol-cell">${opp.symbol}</td>
+                    <td class="symbol-cell"><span style="color: #999; font-size: 9px;">${opp.id}</span><br>${opp.symbol}</td>
                     <td class="profit-cell ${profitClass}">${opp.profit_pct.toFixed(3)}%</td>
                     <td class="source-cell">${this.formatSourceName(opp.buy_source)}</td>
                     <td class="price-cell">$${this.formatPrice(opp.buy_price)}</td>
