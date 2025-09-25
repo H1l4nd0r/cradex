@@ -16,14 +16,15 @@ import (
 )
 
 type ArbitrageOpportunity struct {
-	Symbol     string  `json:"symbol"`
-	BuySource  string  `json:"buy_source"`
-	SellSource string  `json:"sell_source"`
-	BuyPrice   float64 `json:"buy_price"`
-	SellPrice  float64 `json:"sell_price"`
-	ProfitPct  float64 `json:"profit_pct"`
-	Timestamp  int64   `json:"timestamp"`
-	Id         string  `json:"id,omitempty"`
+	Symbol          string  `json:"symbol"`
+	BuySource       string  `json:"buy_source"`
+	SellSource      string  `json:"sell_source"`
+	BuyPrice        float64 `json:"buy_price"`
+	SellPrice       float64 `json:"sell_price"`
+	ProfitPct       float64 `json:"profit_pct"`
+	Timestamp       int64   `json:"timestamp"`
+	Id              string  `json:"id,omitempty"`
+	HasActiveOrders bool    `json:"has_active_orders,omitempty"`
 }
 
 type ActiveOrder struct {
@@ -190,6 +191,11 @@ func (s *FuturesScanner) checkArbitrage(symbol string) {
 
 func (s *FuturesScanner) broadcastOpportunity(opportunity ArbitrageOpportunity) {
 	s.oppMutex.Lock()
+	// Check if we need to clean up old unused opportunities
+	const maxOpportunities = 25
+	if len(s.opportunities) >= maxOpportunities {
+		s.cleanupUnusedOpportunities()
+	}
 	s.opportunities[opportunity.Id] = opportunity
 	s.oppMutex.Unlock()
 
@@ -225,6 +231,63 @@ func (s *FuturesScanner) broadcastOpportunity(opportunity ArbitrageOpportunity) 
 			delete(s.wsClients, client)
 		}
 		s.clientsMutex.Unlock()
+	}
+}
+
+// cleanupUnusedOpportunities removes opportunities that don't have active orders to maintain the limit
+func (s *FuturesScanner) cleanupUnusedOpportunities() {
+	const maxOpportunities = 25 // Use the same limit as in frontend
+
+	// Count opportunities with active orders
+	usedCount := 0
+	for _, opp := range s.opportunities {
+		if opp.HasActiveOrders {
+			usedCount++
+		}
+	}
+
+	// If we still have space after keeping used opportunities, keep some unused ones
+	if usedCount >= maxOpportunities {
+		// Remove all unused opportunities
+		for id, opp := range s.opportunities {
+			if !opp.HasActiveOrders {
+				delete(s.opportunities, id)
+			}
+		}
+		return
+	}
+
+	// Need to keep some unused opportunities
+	keepUnused := maxOpportunities - usedCount
+	unusedOpportunities := make([]string, 0)
+
+	// Collect unused opportunities
+	for id, opp := range s.opportunities {
+		if !opp.HasActiveOrders {
+			unusedOpportunities = append(unusedOpportunities, id)
+		}
+	}
+
+	// Sort by timestamp to keep newest unused ones
+	if len(unusedOpportunities) > keepUnused {
+		// Sort by timestamp descending
+		s.sortByTimestamp(unusedOpportunities)
+
+		// Keep only the newest ones
+		for i := keepUnused; i < len(unusedOpportunities); i++ {
+			delete(s.opportunities, unusedOpportunities[i])
+		}
+	}
+}
+
+// sortByTimestamp sorts opportunity IDs by their timestamps (newest first)
+func (s *FuturesScanner) sortByTimestamp(ids []string) {
+	for i := 0; i < len(ids)-1; i++ {
+		for j := i + 1; j < len(ids); j++ {
+			if s.opportunities[ids[i]].Timestamp < s.opportunities[ids[j]].Timestamp {
+				ids[i], ids[j] = ids[j], ids[i]
+			}
+		}
 	}
 }
 
@@ -420,6 +483,17 @@ func (s *FuturesScanner) executeArbitrageOrders(opportunityId string) {
 	s.ordersMutex.Lock()
 	s.activeOrders = append(s.activeOrders, buyOrder, sellOrder)
 	s.ordersMutex.Unlock()
+
+	// Mark opportunity as having active orders
+	s.oppMutex.Lock()
+	if existingOpp, exists := s.opportunities[opportunityId]; exists {
+		existingOpp.HasActiveOrders = true
+		s.opportunities[opportunityId] = existingOpp
+
+		// Broadcast the updated opportunity to reflect the status change
+		s.broadcastOpportunity(existingOpp)
+	}
+	s.oppMutex.Unlock()
 
 	// Broadcast the new orders
 	s.broadcastActiveOrders()

@@ -778,17 +778,21 @@ class FuturesArbitrageScanner {
             const isRecent = Date.now() - opp.timestamp < 5000; // Fresh for 5 seconds
             const profitClass = this.getProfitClass(opp.profit_pct);
             const timeStr = this.formatTime(opp.timestamp);
+            const hasActiveOrders = opp.has_active_orders || false;
+            const rowStyle = hasActiveOrders ? 'background: rgba(255, 165, 0, 0.1); border-left: 2px solid #ffa500;' : '';
 
             html += `
-                <tr class="${isRecent ? 'fresh' : ''}" data-id="${opp.id}">
-                    <td class="symbol-cell"><span style="color: #999; font-size: 9px;">${opp.id}</span><br>${opp.symbol}</td>
+                <tr class="${isRecent ? 'fresh' : ''}" data-id="${opp.id}" style="${rowStyle}">
+                    <td class="symbol-cell"><span style="color: #999; font-size: 9px;">${opp.id}</span><br>${opp.symbol}${hasActiveOrders ? ' <span style="color: #ffa500; font-weight: bold;">[USED]</span>' : ''}</td>
                     <td class="profit-cell ${profitClass}">${opp.profit_pct.toFixed(3)}%</td>
                     <td class="source-cell">${this.formatSourceName(opp.buy_source)}</td>
                     <td class="price-cell">$${this.formatPrice(opp.buy_price)}</td>
                     <td class="source-cell">${this.formatSourceName(opp.sell_source)}</td>
                     <td class="price-cell">$${this.formatPrice(opp.sell_price)}</td>
                     <td class="time-cell">${timeStr}</td>
-                    <td class="action-cell"><button class="go-button" data-opportunity-id="${opp.id}">Go</button></td>
+                    <td class="action-cell">${hasActiveOrders ?
+                        '<button class="go-button" disabled style="background: #666; color: #999; cursor: not-allowed;">Used</button>' :
+                        `<button class="go-button" data-opportunity-id="${opp.id}">Go</button>`}</td>
                 </tr>
             `;
         });
