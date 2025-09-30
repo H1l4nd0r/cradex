@@ -384,14 +384,16 @@ class FuturesArbitrageScanner {
     
     processMessageQueue() {
         const messagesToProcess = this.messageQueue.splice(0);
-        
+
         // Group messages by type to batch similar operations
         const priceUpdates = [];
         const arbitrageOpportunities = [];
         const spreadsUpdates = [];
         const otherMessages = [];
-        
+
         messagesToProcess.forEach(data => {
+
+
             if (data.type === 'price_update') {
                 priceUpdates.push(data);
             } else if (data.type === 'arbitrage') {
@@ -400,34 +402,35 @@ class FuturesArbitrageScanner {
                 spreadsUpdates.push(data);
             } else if (data.type === 'active_orders') {
                 // Handle active orders separately
+                console.log('Processing active_orders message in queue:', data);
                 this.handleActiveOrders(data.orders);
+            } else if (data.type === 'prices') {
+                // Handle full price updates (no batching needed)
+                this.updatePrices(data.prices);
             } else {
                 otherMessages.push(data);
             }
         });
-        
+
         // Process price updates in batch
         if (priceUpdates.length > 0) {
             this.handleBatchedPriceUpdates(priceUpdates);
         }
-        
+
         // Process arbitrage opportunities
         arbitrageOpportunities.forEach(data => {
             this.handleArbitrageOpportunity(data.opportunity);
         });
-        
+
         // Process latest spreads update only
         if (spreadsUpdates.length > 0) {
             this.handleSpreadsUpdate(spreadsUpdates[spreadsUpdates.length - 1]);
         }
-        
-        // Process other messages normally
-        otherMessages.forEach(data => {
-            this.handleWebSocketMessage(data);
-        });
-        
+
+        // Note: Other message types are handled above; otherMessages array now only contains truly unhandled types
+
         this.processingMessages = false;
-        
+
         // Schedule UI updates
         this.updateSourceList();
         this.updateChart();
@@ -443,17 +446,7 @@ class FuturesArbitrageScanner {
         });
     }
 
-    handleWebSocketMessage(data) {
-        if (data.type === 'prices') {
-            this.updatePrices(data.prices);
-        } else if (data.type === 'price_update') {
-            this.handlePriceUpdate(data);
-        } else if (data.type === 'arbitrage') {
-            this.handleArbitrageOpportunity(data.opportunity);
-        } else if (data.type === 'spreads') {
-            this.handleSpreadsUpdate(data);
-        }
-    }
+
 
     updatePrices(prices) {
         for (const [symbol, sourcePrices] of Object.entries(prices)) {
@@ -983,10 +976,23 @@ class FuturesArbitrageScanner {
 
     // Handle active orders update from server
     handleActiveOrders(orders) {
-        // Store and update the active orders table
-        this.activeOrders = orders;
+        // Update existing orders or add new ones based on ID
+        orders.forEach(newOrder => {
+            const existingIndex = this.activeOrders.findIndex(order => order.id === newOrder.id);
+            if (existingIndex >= 0) {
+                // Update existing order
+                this.activeOrders[existingIndex] = newOrder;
+            } else {
+                // Add new order
+                this.activeOrders.push(newOrder);
+            }
+        });
+
+        // Remove orders that are no longer in the updated list (they might be closed)
+        const newOrderIds = new Set(orders.map(order => order.id));
+        this.activeOrders = this.activeOrders.filter(order => newOrderIds.has(order.id));
+
         this.updateActiveOrdersTable();
-        console.log('Updated active orders:', orders);
     }
 
     updateActiveOrdersTable() {
@@ -1009,7 +1015,6 @@ class FuturesArbitrageScanner {
 
         // Group orders by opportunity
         const ordersByOpportunity = new Map();
-        const ordersWithoutOpportunity = [];
 
         this.activeOrders.forEach((order) => {
             if (order.opportunity && order.opportunity.id) {
@@ -1020,9 +1025,7 @@ class FuturesArbitrageScanner {
                     });
                 }
                 ordersByOpportunity.get(order.opportunity.id).orders.push(order);
-            } else {
-                ordersWithoutOpportunity.push(order);
-            }
+            } 
         });
 
         // Generate table rows for active orders, grouped by opportunity
@@ -1070,6 +1073,7 @@ class FuturesArbitrageScanner {
                 let statusClass = 'neutral';
                 if (order.status === 'filled') statusClass = 'positive';
                 else if (order.status === 'pending') statusClass = 'opportunity';
+                else if (order.status === 'closed') statusClass = 'neutral';
 
                 html += `
                     <tr class="${isRecent ? 'fresh' : ''}" data-id="${order.id}">
@@ -1088,32 +1092,6 @@ class FuturesArbitrageScanner {
             });
         }
 
-        // Then add orders without opportunity (rare, but for backward compatibility)
-        ordersWithoutOpportunity.forEach((order) => {
-            const isRecent = Date.now() - order.timestamp < 5000; // Fresh for 5 seconds
-            const timeStr = this.formatTime(order.timestamp);
-
-            // Determine status color
-            let statusClass = 'neutral';
-            if (order.status === 'filled') statusClass = 'positive';
-            else if (order.status === 'pending') statusClass = 'opportunity';
-
-            html += `
-                <tr class="${isRecent ? 'fresh' : ''}" data-id="${order.id}">
-                    <td class="symbol-cell">${order.symbol}</td>
-                    <td class="profit-cell">${order.side.toUpperCase()}</td>
-                    <td class="source-cell">${this.formatSourceName(order.source)}</td>
-                    <td class="price-cell">$${this.formatPrice(order.price)}</td>
-                    <td class="price-cell">${order.quantity.toFixed(4)}</td>
-                    <td class="time-cell">${timeStr}</td>
-                    <td class="spread-cell ${statusClass}">${order.status.toUpperCase()}</td>
-                    <td class="action-cell">
-                        <button class="close-order-button" data-order-id="${order.id}">×</button>
-                    </td>
-                </tr>
-            `;
-        });
-
         tbody.innerHTML = html;
 
         // Add event listeners for close buttons
@@ -1122,17 +1100,23 @@ class FuturesArbitrageScanner {
             button.addEventListener('click', (e) => {
                 const orderId = e.target.getAttribute('data-order-id');
                 if (orderId) {
+                    console.log(`Truying to close order: ${orderId}`);
                     this.closeOrder(orderId);
+                }else{
+                    console.log(`Order not found: ${orderId}`);
                 }
             });
         });
     }
 
     closeOrder(orderId) {
-        // In a real implementation, send a close order command to server
-        console.log(`Closing order: ${orderId}`);
-        // For now, just show in UI that order was closed
-        // In real implementation, this would send a message to server
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            const message = `close_order:${orderId}`;
+            this.ws.send(message);
+            console.log(`Sent close order for order: ${orderId}`);
+        } else {
+            console.error('WebSocket not connected, cannot close order');
+        }
     }
 
     clearAllOrders() {

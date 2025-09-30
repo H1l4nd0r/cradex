@@ -33,7 +33,7 @@ type ActiveOrder struct {
 	Source      string                `json:"source"`
 	Price       float64               `json:"price"`
 	Quantity    float64               `json:"quantity"`
-	Status      string                `json:"status"` // "pending", "filled", "cancelled"
+	Status      string                `json:"status"` // "pending", "filled", "cancelled", "closed"
 	Timestamp   int64                 `json:"timestamp"`
 	Opportunity *ArbitrageOpportunity `json:"opportunity,omitempty"`
 }
@@ -208,6 +208,8 @@ func (s *FuturesScanner) broadcastOpportunity(opportunity ArbitrageOpportunity) 
 	s.wsWriteMutex.Lock()
 	defer s.wsWriteMutex.Unlock()
 
+	log.Printf("Broadcasting active_orders to %d clients", len(clients))
+
 	var toRemove []*websocket.Conn
 	for _, client := range clients {
 		err := client.WriteJSON(message)
@@ -215,6 +217,8 @@ func (s *FuturesScanner) broadcastOpportunity(opportunity ArbitrageOpportunity) 
 			log.Printf("WebSocket write error: %v", err)
 			client.Close()
 			toRemove = append(toRemove, client)
+		} else {
+			log.Printf("Successfully sent active_orders message to client")
 		}
 	}
 
@@ -225,6 +229,7 @@ func (s *FuturesScanner) broadcastOpportunity(opportunity ArbitrageOpportunity) 
 			delete(s.wsClients, client)
 		}
 		s.clientsMutex.Unlock()
+		log.Printf("Removed %d failed WebSocket clients", len(toRemove))
 	}
 }
 
@@ -368,8 +373,14 @@ func (s *FuturesScanner) handleWebSocket(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *FuturesScanner) handleClientMessage(message string, conn *websocket.Conn) {
-	// For now, just handle "execute_arbitrage" messages
-	if message[:len("execute_arbitrage")] == "execute_arbitrage" {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Recovered in handleClientMessage: %v", r)
+		}
+	}()
+	log.Printf("Got message: %q", message)
+	// Handle "execute_arbitrage" messages
+	if strings.HasPrefix(message, "execute_arbitrage:") {
 		// Extract opportunity ID from message
 		// Format: "execute_arbitrage:opportunity_id"
 		parts := strings.Split(message, ":")
@@ -377,18 +388,34 @@ func (s *FuturesScanner) handleClientMessage(message string, conn *websocket.Con
 			opportunityId := parts[1]
 			s.executeArbitrageOrders(opportunityId)
 		}
+		log.Printf("Received execute arbitrage")
+	}
+	// Handle "close_order" messages
+	if strings.HasPrefix(message, "close_order:") {
+		// Extract order ID from message
+		// Format: "close_order:order_id"
+		parts := strings.Split(message, ":")
+		if len(parts) == 2 {
+			orderId := parts[1]
+			s.closeOrder(orderId)
+		}
+		log.Printf("Received close order")
 	}
 }
 
 func (s *FuturesScanner) executeArbitrageOrders(opportunityId string) {
+	log.Printf("Received execute_arbitrage request for opportunity: %s", opportunityId)
+
 	s.oppMutex.RLock()
 	opportunity, exists := s.opportunities[opportunityId]
 	s.oppMutex.RUnlock()
 
 	if !exists {
-		log.Printf("Opportunity %s not found", opportunityId)
+		log.Printf("Opportunity %s not found in map with %d opportunities", opportunityId, len(s.opportunities))
 		return
 	}
+
+	log.Printf("Found opportunity %s, creating orders", opportunityId)
 
 	now := time.Now()
 
@@ -425,23 +452,53 @@ func (s *FuturesScanner) executeArbitrageOrders(opportunityId string) {
 	s.broadcastActiveOrders()
 }
 
+func (s *FuturesScanner) closeOrder(orderId string) {
+	s.ordersMutex.Lock()
+	defer s.ordersMutex.Unlock()
+
+	// Find and update the order status
+	for i, order := range s.activeOrders {
+		if order.Id == orderId {
+			s.activeOrders[i].Status = "closed"
+			log.Printf("Closed order %s", orderId)
+			break
+		}
+	}
+
+	log.Printf("About to broadcast active orders after close, total orders: %d", len(s.activeOrders))
+
+	// Broadcast the updated orders
+	s.broadcastActiveOrders()
+}
+
 func (s *FuturesScanner) broadcastActiveOrders() {
 	s.ordersMutex.RLock()
 	ordersCopy := make([]ActiveOrder, len(s.activeOrders))
 	copy(ordersCopy, s.activeOrders)
 	s.ordersMutex.RUnlock()
 
+	log.Printf("Copied %d orders to broadcast", len(ordersCopy))
+
 	message := map[string]interface{}{
 		"type":   "active_orders",
 		"orders": ordersCopy,
 	}
 
+	log.Printf("Trying to lock clients ws...")
 	s.clientsMutex.RLock()
+	log.Printf("Locked clients ws...")
 	clients := make([]*websocket.Conn, 0, len(s.wsClients))
 	for client := range s.wsClients {
 		clients = append(clients, client)
 	}
 	s.clientsMutex.RUnlock()
+
+	log.Printf("Broadcasting active_orders message to %d clients", len(clients))
+
+	if len(clients) == 0 {
+		log.Printf("No clients connected, skipping broadcast")
+		return
+	}
 
 	s.wsWriteMutex.Lock()
 	defer s.wsWriteMutex.Unlock()
@@ -453,6 +510,8 @@ func (s *FuturesScanner) broadcastActiveOrders() {
 			log.Printf("WebSocket write error: %v", err)
 			client.Close()
 			toRemove = append(toRemove, client)
+		} else {
+			log.Printf("Successfully sent active_orders message to client")
 		}
 	}
 
@@ -463,6 +522,7 @@ func (s *FuturesScanner) broadcastActiveOrders() {
 			delete(s.wsClients, client)
 		}
 		s.clientsMutex.Unlock()
+		log.Printf("Removed %d failed WebSocket clients", len(toRemove))
 	}
 }
 
