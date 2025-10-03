@@ -1,15 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"futures-arbitrage-scanner/exchanges"
+
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"futures-arbitrage-scanner/exchanges"
 
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
@@ -39,32 +40,37 @@ type ActiveOrder struct {
 }
 
 type FuturesScanner struct {
-	prices           map[string]map[string]float64
-	pricesMutex      sync.RWMutex
-	activeOrders     []ActiveOrder
-	ordersMutex      sync.RWMutex
-	opportunities    map[string]ArbitrageOpportunity
-	oppMutex         sync.RWMutex
-	wsClients        map[*websocket.Conn]bool
-	clientsMutex     sync.RWMutex
-	wsWriteMutex     sync.Mutex // Protects WebSocket writes
-	upgrader         websocket.Upgrader
-	priceChan        chan exchanges.PriceData
-	orderbookChan    chan exchanges.OrderbookData
-	tradeChan        chan exchanges.TradeData
-	lastOpportunity  map[string]time.Time // Track last alert per symbol
-	opportunityMutex sync.RWMutex
+	prices            map[string]map[string]float64
+	pricesMutex       sync.RWMutex
+	activeOrders      []ActiveOrder
+	ordersMutex       sync.RWMutex
+	opportunities     map[string]ArbitrageOpportunity
+	oppMutex          sync.RWMutex
+	wsClients         map[*websocket.Conn]bool // Main socket clients (market data)
+	clientsMutex      sync.RWMutex
+	orderWsClients    map[*websocket.Conn]bool // Order socket clients
+	orderClientsMutex sync.RWMutex
+	wsWriteMutex      sync.Mutex // Protects WebSocket writes
+	upgrader          websocket.Upgrader
+	priceChan         chan exchanges.PriceData
+	orderbookChan     chan exchanges.OrderbookData
+	tradeChan         chan exchanges.TradeData
+	orderCommandChan  chan string          // Channel for order commands
+	lastOpportunity   map[string]time.Time // Track last alert per symbol
+	opportunityMutex  sync.RWMutex
 }
 
 func NewFuturesScanner() *FuturesScanner {
 	return &FuturesScanner{
-		prices:          make(map[string]map[string]float64),
-		opportunities:   make(map[string]ArbitrageOpportunity),
-		wsClients:       make(map[*websocket.Conn]bool),
-		priceChan:       make(chan exchanges.PriceData, 1000),
-		orderbookChan:   make(chan exchanges.OrderbookData, 1000),
-		tradeChan:       make(chan exchanges.TradeData, 1000),
-		lastOpportunity: make(map[string]time.Time),
+		prices:           make(map[string]map[string]float64),
+		opportunities:    make(map[string]ArbitrageOpportunity),
+		wsClients:        make(map[*websocket.Conn]bool),
+		orderWsClients:   make(map[*websocket.Conn]bool),
+		priceChan:        make(chan exchanges.PriceData, 1000),
+		orderbookChan:    make(chan exchanges.OrderbookData, 1000),
+		tradeChan:        make(chan exchanges.TradeData, 1000),
+		orderCommandChan: make(chan string, 100),
+		lastOpportunity:  make(map[string]time.Time),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true
@@ -98,6 +104,47 @@ func (s *FuturesScanner) processOrderbooks() {
 func (s *FuturesScanner) processTrades() {
 	for range s.tradeChan {
 		// Keep trade data for future use but don't use for pricing
+	}
+}
+
+func (s *FuturesScanner) processOrderCommands() {
+	for message := range s.orderCommandChan {
+		log.Printf("Processing order command from channel: %q", message)
+		// Handle "execute_arbitrage" messages
+		if strings.HasPrefix(message, "execute_arbitrage:") {
+			// Extract opportunity ID from message
+			// Format: "execute_arbitrage:opportunity_id"
+			parts := strings.Split(message, ":")
+			if len(parts) == 2 {
+				opportunityId := strings.TrimSpace(parts[1])
+				if opportunityId != "" {
+					s.executeArbitrageOrders(opportunityId)
+					log.Printf("Processed execute arbitrage for opportunity %s", opportunityId)
+				} else {
+					log.Printf("Invalid opportunity ID in message: %q", message)
+				}
+			} else {
+				log.Printf("Invalid execute_arbitrage message format: %q", message)
+			}
+		}
+		// Handle "close_order" messages
+		if strings.HasPrefix(message, "close_order:") {
+			// Extract order ID from message
+			// Format: "close_order:order_id"
+			parts := strings.Split(message, ":")
+			if len(parts) == 2 {
+				orderId := strings.TrimSpace(parts[1])
+				if orderId != "" {
+					s.closeOrder(orderId)
+					log.Printf("Processed close order for order %s", orderId)
+				} else {
+					log.Printf("Invalid order ID in message: %q", message)
+				}
+			} else {
+				log.Printf("Invalid close_order message format: %q", message)
+			}
+		}
+		// Add other order commands here if needed
 	}
 }
 
@@ -208,7 +255,7 @@ func (s *FuturesScanner) broadcastOpportunity(opportunity ArbitrageOpportunity) 
 	s.wsWriteMutex.Lock()
 	defer s.wsWriteMutex.Unlock()
 
-	log.Printf("Broadcasting active_orders to %d clients", len(clients))
+	//log.Printf("Broadcasting arbitrage to %d clients", len(clients))
 
 	var toRemove []*websocket.Conn
 	for _, client := range clients {
@@ -218,7 +265,7 @@ func (s *FuturesScanner) broadcastOpportunity(opportunity ArbitrageOpportunity) 
 			client.Close()
 			toRemove = append(toRemove, client)
 		} else {
-			log.Printf("Successfully sent active_orders message to client")
+			//log.Printf("Successfully sent arbitrage message to client")
 		}
 	}
 
@@ -336,6 +383,49 @@ func (s *FuturesScanner) broadcastPrices() {
 	}
 }
 
+func (s *FuturesScanner) handleOrdersWebSocket(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Orders WebSocket connection attempt from %s", r.RemoteAddr)
+
+	conn, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Orders WebSocket upgrade error from %s: %v", r.RemoteAddr, err)
+		return
+	}
+	defer conn.Close()
+
+	s.orderClientsMutex.Lock()
+	s.orderWsClients[conn] = true
+	orderClientCount := len(s.orderWsClients)
+	s.orderClientsMutex.Unlock()
+
+	log.Printf("Orders WebSocket client connected from %s. Total order clients: %d", r.RemoteAddr, orderClientCount)
+
+	defer func() {
+		s.orderClientsMutex.Lock()
+		delete(s.orderWsClients, conn)
+		log.Printf("Orders WebSocket client disconnected. Total order clients: %d", len(s.orderWsClients))
+		s.orderClientsMutex.Unlock()
+	}()
+
+	for {
+		messageType, message, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+
+		if messageType == websocket.TextMessage {
+			// Send command to order processing channel
+			log.Printf("Received order command: %q", message)
+			select {
+			case s.orderCommandChan <- string(message):
+				// Successfully sent to channel
+			default:
+				log.Printf("Order command channel full, dropping message: %q", message)
+			}
+		}
+	}
+}
+
 func (s *FuturesScanner) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	log.Printf("WebSocket connection attempt from %s", r.RemoteAddr)
 
@@ -373,34 +463,8 @@ func (s *FuturesScanner) handleWebSocket(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *FuturesScanner) handleClientMessage(message string, conn *websocket.Conn) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("Recovered in handleClientMessage: %v", r)
-		}
-	}()
-	log.Printf("Got message: %q", message)
-	// Handle "execute_arbitrage" messages
-	if strings.HasPrefix(message, "execute_arbitrage:") {
-		// Extract opportunity ID from message
-		// Format: "execute_arbitrage:opportunity_id"
-		parts := strings.Split(message, ":")
-		if len(parts) == 2 {
-			opportunityId := parts[1]
-			s.executeArbitrageOrders(opportunityId)
-		}
-		log.Printf("Received execute arbitrage")
-	}
-	// Handle "close_order" messages
-	if strings.HasPrefix(message, "close_order:") {
-		// Extract order ID from message
-		// Format: "close_order:order_id"
-		parts := strings.Split(message, ":")
-		if len(parts) == 2 {
-			orderId := parts[1]
-			s.closeOrder(orderId)
-		}
-		log.Printf("Received close order")
-	}
+	// Main WebSocket - only log commands that come here by mistake
+	log.Printf("Unexpected command received on main WebSocket (should go to /ws/orders): %q", message)
 }
 
 func (s *FuturesScanner) executeArbitrageOrders(opportunityId string) {
@@ -454,7 +518,6 @@ func (s *FuturesScanner) executeArbitrageOrders(opportunityId string) {
 
 func (s *FuturesScanner) closeOrder(orderId string) {
 	s.ordersMutex.Lock()
-	defer s.ordersMutex.Unlock()
 
 	// Find and update the order status
 	for i, order := range s.activeOrders {
@@ -464,6 +527,7 @@ func (s *FuturesScanner) closeOrder(orderId string) {
 			break
 		}
 	}
+	s.ordersMutex.Unlock() // release before broadcasting
 
 	log.Printf("About to broadcast active orders after close, total orders: %d", len(s.activeOrders))
 
@@ -477,26 +541,32 @@ func (s *FuturesScanner) broadcastActiveOrders() {
 	copy(ordersCopy, s.activeOrders)
 	s.ordersMutex.RUnlock()
 
-	log.Printf("Copied %d orders to broadcast", len(ordersCopy))
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("EXCEPTION broadcasting", r)
+		}
+	}()
+
+	log.Printf("Copied %d orders to broadcast to orders clients", len(ordersCopy))
 
 	message := map[string]interface{}{
 		"type":   "active_orders",
 		"orders": ordersCopy,
 	}
 
-	log.Printf("Trying to lock clients ws...")
-	s.clientsMutex.RLock()
-	log.Printf("Locked clients ws...")
-	clients := make([]*websocket.Conn, 0, len(s.wsClients))
-	for client := range s.wsClients {
+	log.Printf("Trying to lock order clients ws...")
+	s.orderClientsMutex.RLock()
+	log.Printf("Locked order clients ws...")
+	clients := make([]*websocket.Conn, 0, len(s.orderWsClients))
+	for client := range s.orderWsClients {
 		clients = append(clients, client)
 	}
-	s.clientsMutex.RUnlock()
+	s.orderClientsMutex.RUnlock()
 
-	log.Printf("Broadcasting active_orders message to %d clients", len(clients))
+	log.Printf("Broadcasting active_orders message to %d order clients", len(clients))
 
 	if len(clients) == 0 {
-		log.Printf("No clients connected, skipping broadcast")
+		log.Printf("No order clients connected, skipping broadcast")
 		return
 	}
 
@@ -505,24 +575,26 @@ func (s *FuturesScanner) broadcastActiveOrders() {
 
 	var toRemove []*websocket.Conn
 	for _, client := range clients {
+		b, _ := json.Marshal(message)
+		log.Printf("JSON to send: %s", string(b))
 		err := client.WriteJSON(message)
 		if err != nil {
-			log.Printf("WebSocket write error: %v", err)
+			log.Printf("Orders WebSocket write error: %v", err)
 			client.Close()
 			toRemove = append(toRemove, client)
 		} else {
-			log.Printf("Successfully sent active_orders message to client")
+			log.Printf("Successfully sent active_orders message to order client")
 		}
 	}
 
 	// Remove failed clients
 	if len(toRemove) > 0 {
-		s.clientsMutex.Lock()
+		s.orderClientsMutex.Lock()
 		for _, client := range toRemove {
-			delete(s.wsClients, client)
+			delete(s.orderWsClients, client)
 		}
-		s.clientsMutex.Unlock()
-		log.Printf("Removed %d failed WebSocket clients", len(toRemove))
+		s.orderClientsMutex.Unlock()
+		log.Printf("Removed %d failed order WebSocket clients", len(toRemove))
 	}
 }
 
@@ -540,6 +612,7 @@ func main() {
 	go scanner.processPrices()
 	go scanner.processOrderbooks()
 	go scanner.processTrades()
+	go scanner.processOrderCommands()
 
 	// Start exchange connections with orderbook feeds
 	go exchanges.ConnectBinanceFutures(symbols, scanner.priceChan, scanner.orderbookChan, scanner.tradeChan)
@@ -560,6 +633,7 @@ func main() {
 	go scanner.broadcastPrices()
 
 	http.HandleFunc("/ws", scanner.handleWebSocket)
+	http.HandleFunc("/ws/orders", scanner.handleOrdersWebSocket)
 	http.Handle("/", http.FileServer(http.Dir("./static/")))
 
 	port := os.Getenv("PORT")

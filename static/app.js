@@ -35,7 +35,11 @@ class FuturesArbitrageScanner {
         // WebSocket message batching
         this.messageQueue = [];
         this.processingMessages = false;
-        
+
+        // Second WebSocket for orders
+        this.ordersWs = null;
+        this.ordersReconnectAttempts = 0;
+
         this.init();
     }
 
@@ -126,6 +130,7 @@ class FuturesArbitrageScanner {
         this.setupSourceCheckboxDelegation();
         this.setupChart();
         this.connectWebSocket();
+        this.connectOrdersWebSocket();
         this.setupOpportunitiesTable();
     }
 
@@ -323,15 +328,15 @@ class FuturesArbitrageScanner {
     connectWebSocket() {
         const wsStatus = document.getElementById('wsStatus');
         const wsStatusText = document.getElementById('wsStatusText');
-        
+
         wsStatus.className = 'status-dot disconnected';
         wsStatusText.textContent = 'Connecting...';
 
         try {
             this.ws = new WebSocket(`ws://${window.location.host}/ws`);
-            
+
             this.ws.onopen = () => {
-                console.log('WebSocket connected');
+                console.log('Market data WebSocket connected');
                 wsStatus.className = 'status-dot connected';
                 wsStatusText.textContent = 'Connected';
                 this.reconnectAttempts = 0;
@@ -342,26 +347,70 @@ class FuturesArbitrageScanner {
                     const data = JSON.parse(event.data);
                     this.queueMessage(data);
                 } catch (error) {
-                    console.error('Error parsing WebSocket message:', error);
+                    console.error('Error parsing market data WebSocket message:', error);
                 }
             };
 
             this.ws.onclose = () => {
-                console.log('WebSocket disconnected');
+                console.log('Market data WebSocket disconnected');
                 wsStatus.className = 'status-dot disconnected';
                 wsStatusText.textContent = 'Disconnected';
                 this.scheduleReconnect();
             };
 
             this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
+                console.error('Market data WebSocket error:', error);
                 wsStatus.className = 'status-dot disconnected';
                 wsStatusText.textContent = 'Error';
             };
 
         } catch (error) {
-            console.error('Failed to create WebSocket connection:', error);
+            console.error('Failed to create market data WebSocket connection:', error);
             this.scheduleReconnect();
+        }
+    }
+
+    connectOrdersWebSocket() {
+        console.log('Connecting orders WebSocket...');
+
+        try {
+            this.ordersWs = new WebSocket(`ws://${window.location.host}/ws/orders`);
+
+            this.ordersWs.onopen = () => {
+                console.log('Orders WebSocket connected');
+                this.ordersReconnectAttempts = 0;
+            };
+
+            this.ordersWs.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    this.handleOrdersMessage(data);
+                } catch (error) {
+                    console.error('Error parsing orders WebSocket message:', error);
+                }
+            };
+
+            this.ordersWs.onclose = () => {
+                console.log('Orders WebSocket disconnected');
+                this.scheduleOrdersReconnect();
+            };
+
+            this.ordersWs.onerror = (error) => {
+                console.error('Orders WebSocket error:', error);
+            };
+
+        } catch (error) {
+            console.error('Failed to create orders WebSocket connection:', error);
+            this.scheduleOrdersReconnect();
+        }
+    }
+
+    scheduleOrdersReconnect() {
+        if (this.ordersReconnectAttempts < this.maxReconnectAttempts) {
+            this.ordersReconnectAttempts++;
+            const delay = Math.min(1000 * Math.pow(2, this.ordersReconnectAttempts), 30000);
+            console.log(`Reconnecting orders WebSocket in ${delay}ms (attempt ${this.ordersReconnectAttempts})`);
+            setTimeout(() => this.connectOrdersWebSocket(), delay);
         }
     }
 
@@ -400,10 +449,6 @@ class FuturesArbitrageScanner {
                 arbitrageOpportunities.push(data);
             } else if (data.type === 'spreads') {
                 spreadsUpdates.push(data);
-            } else if (data.type === 'active_orders') {
-                // Handle active orders separately
-                console.log('Processing active_orders message in queue:', data);
-                this.handleActiveOrders(data.orders);
             } else if (data.type === 'prices') {
                 // Handle full price updates (no batching needed)
                 this.updatePrices(data.prices);
@@ -949,7 +994,7 @@ class FuturesArbitrageScanner {
 
     // Send execute arbitrage command to server
     executeArbitrage(opportunityId) {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        if (this.ordersWs && this.ordersWs.readyState === WebSocket.OPEN) {
             // Find and highlight the opportunity row
             const row = document.querySelector(`tr[data-id="${opportunityId}"]`);
             if (row) {
@@ -967,14 +1012,23 @@ class FuturesArbitrageScanner {
             }
 
             const message = `execute_arbitrage:${opportunityId}`;
-            this.ws.send(message);
+            this.ordersWs.send(message);
             console.log(`Sent execute arbitrage for opportunity: ${opportunityId}`);
         } else {
-            console.error('WebSocket not connected, cannot execute arbitrage');
+            console.error('Orders WebSocket not connected, cannot execute arbitrage');
         }
     }
 
     // Handle active orders update from server
+    // Handle messages from orders WebSocket
+    handleOrdersMessage(data) {
+        if (data.type === 'active_orders') {
+            this.handleActiveOrders(data.orders);
+        } else {
+            console.log('Unhandled orders message type:', data.type);
+        }
+    }
+
     handleActiveOrders(orders) {
         // Update existing orders or add new ones based on ID
         orders.forEach(newOrder => {
@@ -1110,12 +1164,12 @@ class FuturesArbitrageScanner {
     }
 
     closeOrder(orderId) {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        if (this.ordersWs && this.ordersWs.readyState === WebSocket.OPEN) {
             const message = `close_order:${orderId}`;
-            this.ws.send(message);
+            this.ordersWs.send(message);
             console.log(`Sent close order for order: ${orderId}`);
         } else {
-            console.error('WebSocket not connected, cannot close order');
+            console.error('Orders WebSocket not connected, cannot close order');
         }
     }
 
