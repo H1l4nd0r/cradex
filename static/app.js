@@ -1174,10 +1174,14 @@ class FuturesArbitrageScanner {
     }
 
     clearAllOrders() {
-        // Clear all orders in the UI for now
-        this.activeOrders = [];
-        this.updateActiveOrdersTable();
-        console.log('Cleared all active orders');
+        if (this.ordersWs && this.ordersWs.readyState === WebSocket.OPEN) {
+            // Send clear_closed message to backend
+            const message = 'clear_closed';
+            this.ordersWs.send(message);
+            console.log('Sent clear closed opportunities request to backend');
+        } else {
+            console.error('Orders WebSocket not connected, cannot clear closed opportunities');
+        }
     }
 
     

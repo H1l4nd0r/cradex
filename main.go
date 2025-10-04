@@ -144,6 +144,11 @@ func (s *FuturesScanner) processOrderCommands() {
 				log.Printf("Invalid close_order message format: %q", message)
 			}
 		}
+		// Handle "clear_closed" messages
+		if strings.HasPrefix(message, "clear_closed") {
+			s.clearClosedOpportunities()
+			log.Printf("Processed clear closed opportunities")
+		}
 		// Add other order commands here if needed
 	}
 }
@@ -400,6 +405,9 @@ func (s *FuturesScanner) handleOrdersWebSocket(w http.ResponseWriter, r *http.Re
 
 	log.Printf("Orders WebSocket client connected from %s. Total order clients: %d", r.RemoteAddr, orderClientCount)
 
+	// Send current active orders to the new client
+	go s.broadcastActiveOrders()
+
 	defer func() {
 		s.orderClientsMutex.Lock()
 		delete(s.orderWsClients, conn)
@@ -533,6 +541,61 @@ func (s *FuturesScanner) closeOrder(orderId string) {
 
 	// Broadcast the updated orders
 	s.broadcastActiveOrders()
+}
+
+func (s *FuturesScanner) clearClosedOpportunities() {
+	s.ordersMutex.Lock()
+	defer s.ordersMutex.Unlock()
+
+	// Group orders by opportunity ID
+	ordersByOpportunity := make(map[string][]ActiveOrder)
+	for _, order := range s.activeOrders {
+		if order.Opportunity != nil {
+			oppId := order.Opportunity.Id
+			ordersByOpportunity[oppId] = append(ordersByOpportunity[oppId], order)
+		}
+	}
+
+	// Find opportunities where all orders are closed
+	var opportunitiesToRemove []string
+	for oppId, orders := range ordersByOpportunity {
+		allClosed := true
+		for _, order := range orders {
+			if order.Status != "closed" {
+				allClosed = false
+				break
+			}
+		}
+		if allClosed {
+			opportunitiesToRemove = append(opportunitiesToRemove, oppId)
+		}
+	}
+
+	// Remove all orders for closed opportunities
+	var filteredOrders []ActiveOrder
+	for _, order := range s.activeOrders {
+		if order.Opportunity != nil {
+			shouldRemove := false
+			for _, oppId := range opportunitiesToRemove {
+				if order.Opportunity.Id == oppId {
+					shouldRemove = true
+					break
+				}
+			}
+			if !shouldRemove {
+				filteredOrders = append(filteredOrders, order)
+			}
+		} else {
+			// Keep orders without opportunities
+			filteredOrders = append(filteredOrders, order)
+		}
+	}
+
+	s.activeOrders = filteredOrders
+	log.Printf("Cleared %d closed opportunities, remaining orders: %d", len(opportunitiesToRemove), len(s.activeOrders))
+
+	// Broadcast the updated orders
+	go s.broadcastActiveOrders()
 }
 
 func (s *FuturesScanner) broadcastActiveOrders() {
