@@ -527,14 +527,42 @@ func (s *FuturesScanner) executeArbitrageOrders(opportunityId string) {
 func (s *FuturesScanner) closeOrder(orderId string) {
 	s.ordersMutex.Lock()
 
+	var closedOpportunityId string
 	// Find and update the order status
 	for i, order := range s.activeOrders {
 		if order.Id == orderId {
 			s.activeOrders[i].Status = "closed"
+			if order.Opportunity != nil {
+				closedOpportunityId = order.Opportunity.Id
+			}
 			log.Printf("Closed order %s", orderId)
 			break
 		}
 	}
+
+	// Check if all orders with the same opportunityId are now closed
+	if closedOpportunityId != "" {
+		allClosed := true
+		for _, order := range s.activeOrders {
+			if order.Opportunity != nil && order.Opportunity.Id == closedOpportunityId && order.Status != "closed" {
+				allClosed = false
+				break
+			}
+		}
+
+		// If all orders for this opportunity are closed, remove them
+		if allClosed {
+			var filteredOrders []ActiveOrder
+			for _, order := range s.activeOrders {
+				if order.Opportunity == nil || order.Opportunity.Id != closedOpportunityId {
+					filteredOrders = append(filteredOrders, order)
+				}
+			}
+			s.activeOrders = filteredOrders
+			log.Printf("All orders for opportunity %s are closed, removed from active orders. Remaining orders: %d", closedOpportunityId, len(s.activeOrders))
+		}
+	}
+
 	s.ordersMutex.Unlock() // release before broadcasting
 
 	log.Printf("About to broadcast active orders after close, total orders: %d", len(s.activeOrders))
