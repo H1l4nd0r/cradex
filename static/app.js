@@ -10,7 +10,7 @@ class FuturesArbitrageScanner {
         this.maxOpportunities = 25; // Reduced from 50
         this.connectedSources = new Set();
         this.currentSort = { field: 'timestamp', direction: 'desc' };
-        this.minProfitFilter = 0.05;
+        this.minProfitFilter = 0.15;
         
         // Source visibility settings with localStorage persistence
         this.enabledSources = this.loadEnabledSources();
@@ -155,6 +155,7 @@ class FuturesArbitrageScanner {
             this.minProfitFilter = parseFloat(e.target.value) || 0;
             this.updateOpportunitiesTable();
             this.updateSpreadsMatrix(); // Update matrix highlighting
+            this.sendMinProfitFilterToBackend(this.minProfitFilter);
         });
 
         const clearButton = document.getElementById('clearOpportunities');
@@ -1184,7 +1185,15 @@ class FuturesArbitrageScanner {
         }
     }
 
-    
+    sendMinProfitFilterToBackend(minProfit) {
+        if (this.ordersWs && this.ordersWs.readyState === WebSocket.OPEN) {
+            const message = `min_profit_filter:${minProfit}`;
+            this.ordersWs.send(message);
+            console.log(`Sent min profit filter to backend: ${minProfit}`);
+        } else {
+            console.error('Orders WebSocket not connected, cannot send min profit filter');
+        }
+    }
 
 }
 

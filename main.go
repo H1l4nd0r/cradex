@@ -58,6 +58,8 @@ type FuturesScanner struct {
 	orderCommandChan  chan string          // Channel for order commands
 	lastOpportunity   map[string]time.Time // Track last alert per symbol
 	opportunityMutex  sync.RWMutex
+	minProfitFilter   float64      // Minimum profit percentage for arbitrage alerts
+	minProfitMutex    sync.RWMutex // Protects minProfitFilter
 }
 
 func NewFuturesScanner() *FuturesScanner {
@@ -71,6 +73,7 @@ func NewFuturesScanner() *FuturesScanner {
 		tradeChan:        make(chan exchanges.TradeData, 1000),
 		orderCommandChan: make(chan string, 100),
 		lastOpportunity:  make(map[string]time.Time),
+		minProfitFilter:  0.15, // Default minimum profit filter
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true
@@ -149,6 +152,26 @@ func (s *FuturesScanner) processOrderCommands() {
 			s.clearClosedOpportunities()
 			log.Printf("Processed clear closed opportunities")
 		}
+		// Handle "min_profit_filter" messages
+		if strings.HasPrefix(message, "min_profit_filter:") {
+			// Extract min profit filter value from message
+			// Format: "min_profit_filter:0.15"
+			parts := strings.Split(message, ":")
+			if len(parts) == 2 {
+				var minProfit float64
+				_, err := fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &minProfit)
+				if err == nil && minProfit >= 0 {
+					s.minProfitMutex.Lock()
+					s.minProfitFilter = minProfit
+					s.minProfitMutex.Unlock()
+					log.Printf("Updated min profit filter to: %.3f%%", minProfit)
+				} else {
+					log.Printf("Invalid min profit filter value in message: %q", message)
+				}
+			} else {
+				log.Printf("Invalid min_profit_filter message format: %q", message)
+			}
+		}
 		// Add other order commands here if needed
 	}
 }
@@ -205,8 +228,13 @@ func (s *FuturesScanner) checkArbitrage(symbol string) {
 
 	profitPct := ((maxPrice - minPrice) / minPrice) * 100
 
-	// Only alert if profit is significant (>0.05%) and we haven't alerted recently
-	if profitPct > 0.05 {
+	// Get current min profit filter
+	s.minProfitMutex.RLock()
+	minProfitThreshold := s.minProfitFilter
+	s.minProfitMutex.RUnlock()
+
+	// Only alert if profit exceeds the threshold and we haven't alerted recently
+	if profitPct > minProfitThreshold {
 		opportunityKey := fmt.Sprintf("%s_%s_%s", symbol, minSource, maxSource)
 
 		s.opportunityMutex.RLock()
@@ -667,7 +695,7 @@ func (s *FuturesScanner) broadcastActiveOrders() {
 	var toRemove []*websocket.Conn
 	for _, client := range clients {
 		b, _ := json.Marshal(message)
-		log.Printf("JSON to send: %s", string(b))
+		// log.Printf("JSON to send: %s", string(b))
 		err := client.WriteJSON(message)
 		if err != nil {
 			log.Printf("Orders WebSocket write error: %v", err)
