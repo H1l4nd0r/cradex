@@ -492,12 +492,12 @@ func (s *FuturesScanner) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		}
 
 		if messageType == websocket.TextMessage {
-			s.handleClientMessage(string(message), conn)
+			s.handleClientMessage(string(message))
 		}
 	}
 }
 
-func (s *FuturesScanner) handleClientMessage(message string, conn *websocket.Conn) {
+func (s *FuturesScanner) handleClientMessage(message string) {
 	// Main WebSocket - only log commands that come here by mistake
 	log.Printf("Unexpected command received on main WebSocket (should go to /ws/orders): %q", message)
 }
