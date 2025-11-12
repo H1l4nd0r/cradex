@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"futures-arbitrage-scanner/exchanges"
 
@@ -694,7 +693,7 @@ func (s *FuturesScanner) broadcastActiveOrders() {
 
 	var toRemove []*websocket.Conn
 	for _, client := range clients {
-		b, _ := json.Marshal(message)
+		// b, _ := json.Marshal(message)
 		// log.Printf("JSON to send: %s", string(b))
 		err := client.WriteJSON(message)
 		if err != nil {
